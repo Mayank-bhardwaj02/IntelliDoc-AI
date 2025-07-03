@@ -70,26 +70,26 @@ def setup_vector_store(chunks, embeddings, collection_name="rag_documents"):
     return client, collection
 
 def setup_advanced_retrieval(collection, chunks, model):
-    # Precompute BM25 for keyword matching
+    
     tokenized_chunks = [chunk.lower().split() for chunk in chunks]
     bm25 = BM25Okapi(tokenized_chunks)
     
     def advanced_search(query_text, n_results=10):
-        # Generate query embedding
+        
         query_embedding = model.encode([query_text], convert_to_numpy=True, normalize_embeddings=True)[0]
         
-        # Semantic search with higher initial results
+        
         dense_results = collection.query(
             query_embeddings=[query_embedding.tolist()],
-            n_results=min(n_results * 2, len(chunks)),  # Get more candidates
+            n_results=min(n_results * 2, len(chunks)),  
             include=["documents", "metadatas", "distances"]
         )
         
-        # BM25 keyword search
+        
         query_tokens = query_text.lower().split()
         bm25_scores = bm25.get_scores(query_tokens)
         
-        # Advanced hybrid scoring with multiple factors
+        
         results = []
         for i, (doc, metadata, distance) in enumerate(zip(
             dense_results['documents'][0],
@@ -98,28 +98,28 @@ def setup_advanced_retrieval(collection, chunks, model):
         )):
             chunk_id = metadata['chunk_id']
             
-            # Semantic similarity (0-1, higher is better)
+            
             semantic_score = 1 - distance
             
-            # BM25 score (normalized)
+            
             bm25_score = bm25_scores[chunk_id] if chunk_id < len(bm25_scores) else 0
             max_bm25 = max(bm25_scores) if max(bm25_scores) > 0 else 1
             normalized_bm25 = bm25_score / max_bm25
             
-            # Query term overlap bonus
+            
             doc_tokens = set(doc.lower().split())
             query_token_set = set(query_tokens)
             overlap_ratio = len(doc_tokens.intersection(query_token_set)) / len(query_token_set) if query_token_set else 0
             
-            # Length penalty (prefer chunks that aren't too short)
-            length_score = min(len(doc) / 500, 1.0)  # Normalize around 500 chars
             
-            # Final hybrid score with weighted combination
+            length_score = min(len(doc) / 500, 1.0)  
+            
+            
             final_score = (
-                0.5 * semantic_score +      # Semantic similarity (50%)
-                0.25 * normalized_bm25 +    # Keyword matching (25%)
-                0.15 * overlap_ratio +      # Direct term overlap (15%)
-                0.1 * length_score          # Content length (10%)
+                0.5 * semantic_score +      
+                0.25 * normalized_bm25 +    
+                0.15 * overlap_ratio +      
+                0.1 * length_score          
             )
             
             results.append({
@@ -131,10 +131,10 @@ def setup_advanced_retrieval(collection, chunks, model):
                 'bm25_score': normalized_bm25
             })
         
-        # Sort by final score and apply stricter filtering
+       
         results.sort(key=lambda x: x['score'], reverse=True)
         
-        # Dynamic threshold - only include chunks significantly relevant
+        
         if results:
             top_score = results[0]['score']
             threshold = max(0.3, top_score * 0.6)  # Adaptive threshold
@@ -149,7 +149,7 @@ def setup_rag_generation(groq_api_key, search_fn):
     client = Groq(api_key=groq_api_key)
     
     def rag_chat(user_query, n_context_chunks=6, temperature=0.05, max_tokens=400):
-        # Get relevant contexts
+       
         search_results = search_fn(user_query, n_results=n_context_chunks)
         
         if not search_results:
@@ -160,10 +160,10 @@ def setup_rag_generation(groq_api_key, search_fn):
                 'cost': 0
             }
         
-        # Build context with only the most relevant chunks
+        
         contexts = []
         for result in search_results:
-            if result['score'] > 0.2:  # Only high-quality matches
+            if result['score'] > 0.2:  
                 contexts.append(result['document'])
         
         if not contexts:
@@ -176,7 +176,7 @@ def setup_rag_generation(groq_api_key, search_fn):
         
         combined_context = "\n\n".join(contexts)
         
-        # Optimized system prompt for direct, accurate responses
+        
         system_prompt = """You are a precise AI assistant that answers questions based strictly on the provided document context.
 
 CRITICAL RULES:
@@ -217,29 +217,29 @@ Provide a direct, natural answer based on the information above:"""
 def build_rag_system(pdf_path, groq_api_key):
     print(f"Building RAG system for: {pdf_path}")
     
-    # Extract text
+    
     extracted_text = extract_text_from_pdf(pdf_path)
     print(f"Extracted {len(extracted_text)} characters")
     
-    # Create optimized chunks
+    
     chunks = chunk_text(extracted_text)
     print(f"Created {len(chunks)} chunks")
     
-    # Generate embeddings
+    
     embeddings, model = generate_embeddings(chunks)
     print(f"Generated embeddings: {embeddings.shape}")
     
-    # Store model globally
+    
     global_rag.model = model
     
-    # Setup vector store
+    
     client, collection = setup_vector_store(chunks, embeddings)
     print(f"Vector store created with {collection.count()} documents")
     
-    # Setup advanced retrieval
+    
     search_fn = setup_advanced_retrieval(collection, chunks, model)
     
-    # Setup RAG generation
+    
     rag_chat = setup_rag_generation(groq_api_key, search_fn)
     
     print("RAG system build complete!")
@@ -261,7 +261,7 @@ async def upload_pdf(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
     
     try:
-        # Save uploaded file temporarily
+        
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
             content = await file.read()
             tmp_file.write(content)
@@ -269,18 +269,18 @@ async def upload_pdf(file: UploadFile = File(...)):
         
         print(f"Temporary file saved: {tmp_file_path}")
         
-        # Build RAG system
+        
         api_key = os.getenv('GROQ_API_KEY')
         if not api_key:
             raise HTTPException(status_code=500, detail="GROQ_API_KEY not configured")
         
         rag_chat = build_rag_system(tmp_file_path, api_key)
         
-        # Update global system
+        
         global_rag.rag_chat = rag_chat
         global_rag.is_ready = True
         
-        # Clean up temp file
+        
         os.unlink(tmp_file_path)
         
         print("PDF processing completed successfully")
@@ -312,6 +312,6 @@ async def chat(message: ChatMessage):
         raise HTTPException(status_code=500, detail=f"Error in chat: {str(e)}")
 
 if __name__ == "__main__":
-    print("Starting Gravitas AI RAG System...")
+    print("Starting AI RAG System...")
     print("Make sure to set GROQ_API_KEY environment variable")
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
